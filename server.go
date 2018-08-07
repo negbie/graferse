@@ -19,7 +19,7 @@ var (
 	grafanaURL  = flag.String("grafana_url", "http://localhost:3000", "Grafana URL")
 	grafanaUser = flag.String("grafana_user", "admin", "Grafana Authproxy Username")
 	withMetric  = flag.Bool("metric", false, "Expose prometheus metrics")
-	timeout     = flag.Duration("timeout", 1, "HTTP read, write timeout in minutes")
+	timeout     = flag.Int("timeout", 16, "HTTP read, write timeout in seconds")
 	readOnly    = flag.Bool("readonly", true, "Don't allow changes inside Grafana")
 	cert        = flag.String("cert", "", "SSL certificate path")
 	key         = flag.String("key", "", "SSL private Key path")
@@ -35,9 +35,9 @@ func main() {
 	}
 
 	if *timeout > 0 {
-		httpTimeout = *timeout * time.Minute
+		httpTimeout = time.Duration(*timeout) * time.Second
 	} else {
-		httpTimeout = 1 * time.Minute
+		httpTimeout = 16 * time.Second
 	}
 
 	var graferseHandler http.HandlerFunc
