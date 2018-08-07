@@ -25,19 +25,19 @@ type HTTPNotifier interface {
 
 // BaseURLResolver URL resolver for upstream requests
 type BaseURLResolver interface {
-	Resolve(r *http.Request) string
+	Resolve(r *http.Request) (URL, username string)
 }
 
 // MakeForwardingProxyHandler create a handler which forwards HTTP requests
 func MakeForwardingProxyHandler(proxy *types.HTTPClientReverseProxy, notifiers []HTTPNotifier, baseURLResolver BaseURLResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		baseURL := baseURLResolver.Resolve(r)
+		baseURL, user := baseURLResolver.Resolve(r)
 
 		requestURL := r.URL.Path
 
 		start := time.Now()
 
-		statusCode, err := forwardRequest(w, r, proxy.Client, baseURL, requestURL, proxy.Timeout)
+		statusCode, err := forwardRequest(w, r, proxy.Client, baseURL, user, requestURL, proxy.Timeout)
 
 		seconds := time.Since(start)
 		if err != nil {
@@ -49,7 +49,7 @@ func MakeForwardingProxyHandler(proxy *types.HTTPClientReverseProxy, notifiers [
 	}
 }
 
-func buildUpstreamRequest(r *http.Request, url string) *http.Request {
+func buildUpstreamRequest(r *http.Request, url, user string) *http.Request {
 
 	if len(r.URL.RawQuery) > 0 {
 		url = fmt.Sprintf("%s?%s", url, r.URL.RawQuery)
@@ -59,6 +59,7 @@ func buildUpstreamRequest(r *http.Request, url string) *http.Request {
 	copyHeaders(upstreamReq.Header, &r.Header)
 
 	upstreamReq.Header["X-Forwarded-For"] = []string{r.RemoteAddr}
+	upstreamReq.Header["X-WEBAUTH-USER"] = []string{user}
 
 	if r.Body != nil {
 		upstreamReq.Body = r.Body
@@ -67,9 +68,9 @@ func buildUpstreamRequest(r *http.Request, url string) *http.Request {
 	return upstreamReq
 }
 
-func forwardRequest(w http.ResponseWriter, r *http.Request, proxyClient *http.Client, baseURL string, requestURL string, timeout time.Duration) (int, error) {
+func forwardRequest(w http.ResponseWriter, r *http.Request, proxyClient *http.Client, baseURL, user, requestURL string, timeout time.Duration) (int, error) {
 
-	upstreamReq := buildUpstreamRequest(r, baseURL+requestURL)
+	upstreamReq := buildUpstreamRequest(r, baseURL+requestURL, user)
 	if upstreamReq.Body != nil {
 		defer upstreamReq.Body.Close()
 	}
@@ -89,7 +90,6 @@ func forwardRequest(w http.ResponseWriter, r *http.Request, proxyClient *http.Cl
 	}
 
 	copyHeaders(w.Header(), &res.Header)
-	log.Printf("header: %#v\n", res.Header)
 
 	// Write status code
 	w.WriteHeader(res.StatusCode)
@@ -151,27 +151,29 @@ func (LoggingNotifier) Notify(method string, URL string, statusCode int, duratio
 
 // SingleHostBaseURLResolver resolves URLs against a single BaseURL
 type SingleHostBaseURLResolver struct {
-	BaseURL string
+	BaseURL  string
+	Username string
 }
 
 // Resolve the base URL for a request
-func (s SingleHostBaseURLResolver) Resolve(r *http.Request) string {
+func (s SingleHostBaseURLResolver) Resolve(r *http.Request) (URL, username string) {
 
 	baseURL := s.BaseURL
 
 	if strings.HasSuffix(baseURL, "/") {
 		baseURL = baseURL[0 : len(baseURL)-1]
 	}
-	return baseURL
+	return baseURL, s.Username
 }
 
 // FunctionAsHostBaseURLResolver resolves URLs using a function from the URL as a host
 type FunctionAsHostBaseURLResolver struct {
 	FunctionSuffix string
+	Username       string
 }
 
 // Resolve the base URL for a request
-func (f FunctionAsHostBaseURLResolver) Resolve(r *http.Request) string {
+func (f FunctionAsHostBaseURLResolver) Resolve(r *http.Request) (URL, username string) {
 	svcName := getServiceName(r.URL.Path)
 
 	const watchdogPort = 8080
@@ -180,5 +182,5 @@ func (f FunctionAsHostBaseURLResolver) Resolve(r *http.Request) string {
 		suffix = "." + f.FunctionSuffix
 	}
 
-	return fmt.Sprintf("http://%s%s:%d", svcName, suffix, watchdogPort)
+	return fmt.Sprintf("http://%s%s:%d", svcName, suffix, watchdogPort), f.Username
 }

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"flag"
 	"log"
 	"net/http"
 	"net/url"
@@ -14,55 +14,86 @@ import (
 	"github.com/negbie/graferse/types"
 )
 
+var (
+	proxyAddr   = flag.String("proxy_addr", ":8080", "Reverse proxy listen address")
+	grafanaURL  = flag.String("grafana_url", "http://localhost:3000", "Grafana URL")
+	grafanaUser = flag.String("grafana_user", "admin", "Grafana Authproxy Username")
+	withMetric  = flag.Bool("metric", false, "Expose prometheus metrics")
+	timeout     = flag.Duration("timeout", 1, "HTTP read, write timeout in minutes")
+	readOnly    = flag.Bool("readonly", true, "Don't allow changes inside Grafana")
+	cert        = flag.String("cert", "", "SSL certificate path")
+	key         = flag.String("key", "", "SSL private Key path")
+)
+
 func main() {
-	domain := "https://github.com"
-	url, err := url.Parse(domain)
+	flag.Parse()
+	var httpTimeout time.Duration
+
+	url, err := url.Parse(*grafanaURL)
 	if err != nil {
-		log.Fatal("If functions_provider_url is provided, then it should be a valid URL.", err)
+		log.Fatal("Please provide a valid Grafana URL like http://localhost:3000", err)
 	}
 
-	timeout := 1 * time.Minute
-	metricsOptions := metrics.BuildMetricsOptions()
-	metrics.RegisterMetrics(metricsOptions)
+	if *timeout > 0 {
+		httpTimeout = *timeout * time.Minute
+	} else {
+		httpTimeout = 1 * time.Minute
+	}
 
 	var graferseHandler http.HandlerFunc
-
-	reverseProxy := types.NewHTTPClientReverseProxy(url, timeout)
+	var forwardingNotifiers []handlers.HTTPNotifier
 
 	loggingNotifier := handlers.LoggingNotifier{}
-	prometheusNotifier := handlers.PrometheusFunctionNotifier{
-		Metrics: &metricsOptions,
-	}
-	forwardingNotifiers := []handlers.HTTPNotifier{loggingNotifier, prometheusNotifier}
+	reverseProxy := types.NewHTTPClientReverseProxy(url, httpTimeout)
 
-	urlResolver := handlers.SingleHostBaseURLResolver{BaseURL: domain}
-	var functionURLResolver handlers.BaseURLResolver
+	if *withMetric {
+		metricsOptions := metrics.BuildMetricsOptions()
+		metrics.RegisterMetrics(metricsOptions)
+		prometheusNotifier := handlers.PrometheusFunctionNotifier{
+			Metrics: &metricsOptions,
+		}
+		forwardingNotifiers = []handlers.HTTPNotifier{loggingNotifier, prometheusNotifier}
+	} else {
+		forwardingNotifiers = []handlers.HTTPNotifier{loggingNotifier}
+	}
+
+	urlResolver := handlers.SingleHostBaseURLResolver{BaseURL: *grafanaURL, Username: *grafanaUser}
+	var basicURLResolver handlers.BaseURLResolver
 
 	//TODO flag!
-	if false {
-		functionURLResolver = handlers.FunctionAsHostBaseURLResolver{FunctionSuffix: "example.com"}
+	if true {
+		basicURLResolver = urlResolver
 	} else {
-		functionURLResolver = urlResolver
+		basicURLResolver = handlers.FunctionAsHostBaseURLResolver{FunctionSuffix: "example.com"}
 	}
 
-	graferseHandler = handlers.MakeForwardingProxyHandler(reverseProxy, forwardingNotifiers, functionURLResolver)
+	graferseHandler = handlers.MakeForwardingProxyHandler(reverseProxy, forwardingNotifiers, basicURLResolver)
 
 	r := mux.NewRouter()
+	r.Handle("/logout", http.RedirectHandler("/", http.StatusMovedPermanently)).Methods(http.MethodGet)
+	if *readOnly {
+		r.Methods("GET").PathPrefix("/").HandlerFunc(graferseHandler)
+	} else {
+		r.PathPrefix("/").HandlerFunc(graferseHandler)
+	}
+	r.Methods("POST").PathPrefix("/api/tsdb/").HandlerFunc(graferseHandler)
 
-	r.HandleFunc("/test", graferseHandler)
-
-	metricsHandler := metrics.PrometheusHandler()
-	r.Handle("/metrics", metricsHandler)
-
-	tcpPort := 8080
+	if *withMetric {
+		metricsHandler := metrics.PrometheusHandler()
+		r.Methods("GET").PathPrefix("/metrics").Handler(metricsHandler)
+	}
 
 	s := &http.Server{
-		Addr:           fmt.Sprintf(":%d", tcpPort),
-		ReadTimeout:    1 * time.Minute,
-		WriteTimeout:   1 * time.Minute,
+		Addr:           *proxyAddr,
+		ReadTimeout:    httpTimeout,
+		WriteTimeout:   httpTimeout,
 		MaxHeaderBytes: http.DefaultMaxHeaderBytes, // 1MB - can be overridden by setting Server.MaxHeaderBytes.
 		Handler:        r,
 	}
-	//TODO TLS!
-	log.Fatal(s.ListenAndServe())
+
+	if *cert != "" && *key != "" {
+		log.Fatal(s.ListenAndServeTLS(*cert, *key))
+	} else {
+		log.Fatal(s.ListenAndServe())
+	}
 }
