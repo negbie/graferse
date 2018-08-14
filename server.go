@@ -70,9 +70,24 @@ func main() {
 	graferseHandler = handlers.MakeForwardingProxyHandler(reverseProxy, forwardingNotifiers, basicURLResolver)
 
 	r := mux.NewRouter()
-	r.Handle("/logout", http.RedirectHandler("/", http.StatusMovedPermanently)).Methods(http.MethodGet)
+
 	if *readOnly {
-		r.Methods("GET").PathPrefix("/").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/dashboards").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/api/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/api/dashboards/").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/api/dashboards/tags").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/api/dashboards/home").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/api/dashboard/snapshots").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/api/dashboards/uid/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/avatar/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/d/{id}/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/public/build/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/public/fonts/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/public/fonts/{name}/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/public/img/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/public/img/{name}/{.*}").HandlerFunc(graferseHandler)
+		r.Methods("GET").Path("/logout").HandlerFunc(redirect)
 	} else {
 		r.PathPrefix("/").HandlerFunc(graferseHandler)
 	}
@@ -80,7 +95,7 @@ func main() {
 
 	if *withMetric {
 		metricsHandler := metrics.PrometheusHandler()
-		r.Methods("GET").PathPrefix("/metrics").Handler(metricsHandler)
+		r.Methods("GET").Path("/metrics").Handler(metricsHandler)
 	}
 
 	s := &http.Server{
@@ -96,4 +111,14 @@ func main() {
 	} else {
 		log.Fatal(s.ListenAndServe())
 	}
+}
+
+func redirect(w http.ResponseWriter, req *http.Request) {
+	//target := "https://" + req.Host + req.URL.Path
+	target := "https://www.google.com"
+	if len(req.URL.RawQuery) > 0 {
+		target += "?" + req.URL.RawQuery
+	}
+	log.Printf("redirect to: %s", target)
+	http.Redirect(w, req, target, http.StatusTemporaryRedirect)
 }

@@ -4,9 +4,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strconv"
@@ -86,6 +88,20 @@ func forwardRequest(w http.ResponseWriter, r *http.Request, proxyClient *http.Cl
 	}
 
 	if res.Body != nil {
+		resBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return 500, err
+		}
+		err = res.Body.Close()
+		if err != nil {
+			return 500, err
+		}
+		resBody = bytes.Replace(resBody, []byte("$your_template_variable"), []byte("goes_in_here"), -1)
+		body := ioutil.NopCloser(bytes.NewReader(resBody))
+		res.Body = body
+		res.ContentLength = int64(len(resBody))
+		res.Header.Set("Content-Length", strconv.Itoa(len(resBody)))
+
 		defer res.Body.Close()
 	}
 
